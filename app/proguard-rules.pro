@@ -1,0 +1,1 @@
+# FreeUp ProGuard rules
