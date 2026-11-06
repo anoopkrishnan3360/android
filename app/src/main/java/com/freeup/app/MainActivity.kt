@@ -1,8 +1,8 @@
-
 package com.freeup.app
 
 import android.Manifest
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -39,6 +39,25 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+}
+
+/** Hands files to the Google Drive app, which uploads them itself. FreeUp stays offline (no INTERNET permission). */
+fun sendToDrive(ctx: Context, items: List<Item>): String {
+    val batch = items.take(200)
+    val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+        type = "*/*"
+        putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(batch.map { it.uri }))
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        setPackage("com.google.android.apps.docs")
+    }
+    return try {
+        ctx.startActivity(intent)
+        "Sent ${batch.size} items to the Google Drive app" +
+            (if (items.size > batch.size) " (first 200; send the rest next)." else ".") +
+            " Drive uploads in the background. FreeUp cannot confirm the upload, so check Drive before deleting anything."
+    } catch (e: ActivityNotFoundException) {
+        "Google Drive app not found. Install it from Google Play first."
     }
 }
 
@@ -81,6 +100,7 @@ fun FreeUpScreen() {
     }
 
     var scanning by remember { mutableStateOf(false) }
+    var driveNote by remember { mutableStateOf("") }
     val busy = scanning || job.running
 
     fun doScan() = scope.launch {
@@ -110,7 +130,8 @@ fun FreeUpScreen() {
             val media =
                 r[Manifest.permission.READ_MEDIA_IMAGES] == true ||
                 r[Manifest.permission.READ_MEDIA_VIDEO] == true ||
-                r[Manifest.permission.READ_EXTERNAL_STORAGE] == true
+                r[Manifest.permission.READ_EXTERNAL_STORAGE] == true ||
+                r[Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED] == true
 
             if (media) {
                 doScan()
@@ -212,10 +233,18 @@ fun FreeUpScreen() {
                 enabled = !busy,
                 onClick = {
                     val permissions =
-                        if (Build.VERSION.SDK_INT >= 33) {
+                        if (Build.VERSION.SDK_INT >= 34) {
                             arrayOf(
                                 Manifest.permission.READ_MEDIA_IMAGES,
-                                Manifest.permission.READ_MEDIA_VIDEO
+                                Manifest.permission.READ_MEDIA_VIDEO,
+                                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+                                Manifest.permission.POST_NOTIFICATIONS
+                            )
+                        } else if (Build.VERSION.SDK_INT >= 33) {
+                            arrayOf(
+                                Manifest.permission.READ_MEDIA_IMAGES,
+                                Manifest.permission.READ_MEDIA_VIDEO,
+                                Manifest.permission.POST_NOTIFICATIONS
                             )
                         } else {
                             arrayOf(
@@ -259,6 +288,19 @@ fun FreeUpScreen() {
             Text(
                 "Copy & verify (${chosen.size} items, ${fmt(chosenSize)})"
             )
+        }
+
+        OutlinedButton(
+            enabled = !busy && chosen.isNotEmpty(),
+            onClick = {
+                driveNote =
+                    if (!isPremium && chosenSize > FREE_LIMIT_BYTES)
+                        "Free limit is 1 GB per run. Select less, or upgrade."
+                    else
+                        sendToDrive(ctx, chosen)
+            }
+        ) {
+            Text("Send to Google Drive (${chosen.size})")
         }
 
         // API 30+ deletion with user consent.
@@ -325,6 +367,10 @@ fun FreeUpScreen() {
                 job.message.ifBlank { status },
                 style = MaterialTheme.typography.bodyMedium
             )
+        }
+
+        if (driveNote.isNotBlank()) {
+            Text(driveNote, style = MaterialTheme.typography.bodySmall)
         }
 
         if (scanning) {
